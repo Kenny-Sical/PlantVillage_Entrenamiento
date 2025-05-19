@@ -8,21 +8,47 @@ import tensorflow as tf
 DATASET_DIR = r"C:\Users\sical\OneDrive\Escritorio\U\Ciclo7\Inteligencia_artificial\PlantVillage"
 
 IMG_SIZE = 128
-classes = sorted([d for d in os.listdir(DATASET_DIR) if os.path.isdir(os.path.join(DATASET_DIR, d))])
-print(f"Clases detectadas ({len(classes)}): {classes}")
+BATCH_SIZE = 32
+EPOCHS = 15
 
-class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
+def get_general_class(folder_name):
+    name = folder_name.lower()
+    if "healthy" in name:
+        return "healthy"
+    if "early_blight" in name:
+        return "early_blight"
+    if "late_blight" in name:
+        return "late_blight"
+    if "bacterial_spot" in name:
+        return "bacterial_spot"
+    if "mosaic_virus" in name:
+        return "mosaic_virus"
+    if "yellowleaf" in name or "yellowleaf__curl_virus" in name:
+        return "yellowleaf_curl_virus"
+    if "leaf_mold" in name:
+        return "leaf_mold"
+    if "septoria" in name:
+        return "septoria_leaf_spot"
+    if "spider_mites" in name:
+        return "spider_mites"
+    if "target_spot" in name:
+        return "target_spot"
+    return folder_name  # por si hay alguna clase extra
+
+folders = [d for d in os.listdir(DATASET_DIR) if os.path.isdir(os.path.join(DATASET_DIR, d))]
+general_classes = sorted(set(get_general_class(f) for f in folders))
+print(f"Clases generales detectadas ({len(general_classes)}): {general_classes}")
+
+class_to_idx = {cls: idx for idx, cls in enumerate(general_classes)}
 
 images = []
 labels = []
 
 print("Cargando imágenes...")
 
-IMAGES_PER_CLASS = 200  # Limita para entrenamiento más rápido, sube si tu PC aguanta
-
-for cls in classes:
-    cls_dir = os.path.join(DATASET_DIR, cls)
-    count = 0
+for folder in folders:
+    general_cls = get_general_class(folder)
+    cls_dir = os.path.join(DATASET_DIR, folder)
     for fname in os.listdir(cls_dir):
         if fname.lower().endswith(('.jpg', '.png', '.jpeg')):
             try:
@@ -31,8 +57,7 @@ for cls in classes:
                 img = img.resize((IMG_SIZE, IMG_SIZE))
                 img_array = np.array(img) / 255.0
                 images.append(img_array)
-                labels.append(class_to_idx[cls])
-                count += 1
+                labels.append(class_to_idx[general_cls])
             except Exception as e:
                 print(f"Error con {img_path}: {e}")
 
@@ -45,65 +70,75 @@ X_train, X_test, y_train, y_test = train_test_split(
     images, labels, test_size=0.2, random_state=42, stratify=labels
 )
 
-# Transfer Learning con MobileNetV2
+# --- DATA AUGMENTATION ---
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+datagen = ImageDataGenerator(
+    rotation_range=25,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    shear_range=0.1,
+    zoom_range=0.1,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+datagen.fit(X_train)
+
+# --- TRANSFER LEARNING (MobileNetV2) ---
 base_model = tf.keras.applications.MobileNetV2(
     input_shape=(IMG_SIZE, IMG_SIZE, 3),
     include_top=False,
     weights='imagenet'
 )
-base_model.trainable = False  # Congela la base para entrenamiento más rápido y menos sobreajuste
+base_model.trainable = False  # congelamos la base
 
-# Modelo con Dropout y regularización
 model = tf.keras.Sequential([
     base_model,
     tf.keras.layers.GlobalAveragePooling2D(),
-    tf.keras.layers.Dropout(0.4),                # Dropout para evitar sobreajuste
-    tf.keras.layers.Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001)),
-    tf.keras.layers.Dropout(0.2),
-    tf.keras.layers.Dense(len(classes), activation='softmax')
+    tf.keras.layers.Dropout(0.4),                   # Regularización extra
+    tf.keras.layers.Dense(len(general_classes), activation='softmax')
 ])
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
+    optimizer='adam',
     loss='sparse_categorical_crossentropy',
     metrics=['accuracy']
 )
 
 model.summary()
 
-# Early stopping para evitar sobreentrenamiento
-early_stop = tf.keras.callbacks.EarlyStopping(
+# EarlyStopping para evitar sobreajuste
+callback = tf.keras.callbacks.EarlyStopping(
     monitor='val_loss',
-    patience=5,
+    patience=3,
     restore_best_weights=True
 )
 
-# Entrenamiento
+# Entrenamiento con augmentación
 history = model.fit(
-    X_train, y_train,
-    epochs=30,
-    batch_size=32,
-    validation_split=0.1,
-    callbacks=[early_stop]
+    datagen.flow(X_train, y_train, batch_size=BATCH_SIZE),
+    epochs=EPOCHS,
+    validation_data=(X_test, y_test),
+    callbacks=[callback],
+    steps_per_epoch=len(X_train) // BATCH_SIZE,
+    verbose=2
 )
 
 loss, acc = model.evaluate(X_test, y_test)
 print(f"Accuracy en test: {acc:.2f}")
 
-# Guardar el modelo y las etiquetas
-model.save('modelo_transfer.h5')
+# Guardar modelo y etiquetas
+model.save('modelo_general.h5')
 
 # Convertir a TFLite
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_model = converter.convert()
-with open('modelo_transfer.tflite', 'wb') as f:
+with open('modelo_general.tflite', 'wb') as f:
     f.write(tflite_model)
-print("Modelo exportado como modelo_transfer.tflite")
+print("Modelo exportado como modelo_general.tflite")
 
-# Guardar las etiquetas
+# Guardar las etiquetas generales
 with open('labels.txt', 'w') as f:
-    for cls in classes:
+    for cls in general_classes:
         f.write(cls + '\n')
 print("Archivo labels.txt creado.")
-
-
