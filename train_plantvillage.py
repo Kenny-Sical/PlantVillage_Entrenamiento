@@ -9,7 +9,7 @@ DATASET_DIR = r"C:\Users\sical\OneDrive\Escritorio\U\Ciclo7\Inteligencia_artific
 
 IMG_SIZE = 128
 BATCH_SIZE = 32
-EPOCHS = 15
+EPOCHS = 300
 
 def get_general_class(folder_name):
     name = folder_name.lower()
@@ -33,7 +33,7 @@ def get_general_class(folder_name):
         return "spider_mites"
     if "target_spot" in name:
         return "target_spot"
-    return folder_name  # por si hay alguna clase extra
+    return folder_name
 
 folders = [d for d in os.listdir(DATASET_DIR) if os.path.isdir(os.path.join(DATASET_DIR, d))]
 general_classes = sorted(set(get_general_class(f) for f in folders))
@@ -70,7 +70,6 @@ X_train, X_test, y_train, y_test = train_test_split(
     images, labels, test_size=0.2, random_state=42, stratify=labels
 )
 
-# --- DATA AUGMENTATION ---
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 datagen = ImageDataGenerator(
@@ -84,13 +83,13 @@ datagen = ImageDataGenerator(
 )
 datagen.fit(X_train)
 
-# --- TRANSFER LEARNING (MobileNetV2) ---
+
 base_model = tf.keras.applications.MobileNetV2(
     input_shape=(IMG_SIZE, IMG_SIZE, 3),
     include_top=False,
     weights='imagenet'
 )
-base_model.trainable = False  # congelamos la base
+base_model.trainable = False
 
 model = tf.keras.Sequential([
     base_model,
@@ -108,18 +107,17 @@ model.compile(
 model.summary()
 
 # EarlyStopping para evitar sobreajuste
-callback = tf.keras.callbacks.EarlyStopping(
-    monitor='val_loss',
-    patience=3,
-    restore_best_weights=True
-)
+#callback = tf.keras.callbacks.EarlyStopping(
+#    monitor='val_loss',
+#    patience=10,
+#    restore_best_weights=True
+#)
 
 # Entrenamiento con augmentación
 history = model.fit(
     datagen.flow(X_train, y_train, batch_size=BATCH_SIZE),
     epochs=EPOCHS,
     validation_data=(X_test, y_test),
-    callbacks=[callback],
     steps_per_epoch=len(X_train) // BATCH_SIZE,
     verbose=2
 )
